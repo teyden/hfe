@@ -29,7 +29,7 @@ def into_tab(array, tab_dir, delim):
 		ofilex.write(str(tmp).replace("['",'').replace("']", '').replace(", ", delim).replace("'", '')+'\n')
 	ofilex.close()
 
-def get_IG(ofile_dir):
+def get_IG(ofile_dir, loader):
 	data = loader.load_file(ofile_dir)
 	data.class_is_last()
 
@@ -38,6 +38,7 @@ def get_IG(ofile_dir):
 	attsel = AttributeSelection()
 	attsel.search(search)
 	attsel.evaluator(evaluator)
+
 	attsel.select_attributes(data)
 
 	results = {}
@@ -83,6 +84,10 @@ if __name__ == '__main__':
 	initial_FS_dir = sys.argv[1] 
 	labels_dir = sys.argv[2]
 	tax_dir = sys.argv[3]
+	
+	# initial_FS_dir = "/Users/teyden/Projects/asthma/data-objects/data-for-testing/data_ID__166__single-split_binary_metadatum.high_abund_clust_num/X_train_for_HFE.tsv"
+	# labels_dir = "/Users/teyden/Projects/asthma/data-objects/data-for-testing/data_ID__166__single-split_binary_metadatum.high_abund_clust_num/y_train_for_HFE.tsv"
+	# tax_dir = "/Users/teyden/Projects/asthma/data/child-study-data-jan-2019/processed/microbiome-data/taxonomy_table.tsv"
 
 	file_name = initial_FS_dir.strip().split('/')[-1]
 	f_dir = initial_FS_dir.strip().replace(file_name, '')
@@ -95,7 +100,8 @@ if __name__ == '__main__':
 	root_node = ''
 	tax_type = '0'
 	if tax_type == '0':
-		root_node = "k__Bacteria"
+		# root_node = "k__Bacteria"
+		root_node = "Bacteria"
 
 	# dictionary of the dataset (each column represents a sample, while each row is for a feature (e.g. an OTU))
 	dataset = np.loadtxt(initial_FS_dir, delimiter='\t', dtype= object)
@@ -125,10 +131,14 @@ if __name__ == '__main__':
 	leaf_name_set = set()
 	taxon_value_dict = {}
 	otu_parent_dict = {}
+
 	#parsing the tax file and prepare the data
 	for element in tax_file:
 		tax = tax_file[element]	# assume that the line starts with the leaf label (e.g. otu_id) then the path details.
 		# set the name of every leaf (i.e. labeling each leaf in the hierarchy with otu_id for example)
+		# print(element)
+		# print(root_node)
+		# print(tax)
 		if root_node in tax:
 			leaf_indx = -1
 			if tax_type == '0':
@@ -138,7 +148,7 @@ if __name__ == '__main__':
 						break	
 			if leaf_indx == -1:
 				leaf_indx = no_of_levels-1
-			if not(element in leaf_name_set):
+			if not (element in leaf_name_set):
 				otu_parent_dict.update({element: tax[leaf_indx].strip()})
 				taxon_value_dict.update({element: feature_records[element]})
 				if tax_type == '0':
@@ -227,7 +237,9 @@ if __name__ == '__main__':
 			leaf_name_set.remove(leaf)
 			nodes_to_remove.append(leaf)
 
-	print "Number of left leaves from phase 1: "+str(len(leaf_name_set))
+	print "Number of leaves left from phase 1: "+str(len(leaf_name_set))
+	print ""
+	
 	ofile3 = open(results_dir+'leaves_phase1.tab', "wb")
 	ofile3.write('leaf_name'+'\n')
 	for l in leaf_name_set:
@@ -243,6 +255,7 @@ if __name__ == '__main__':
 	feature_value_FS.append(["label"]+feature_records["label"])
 	transposed_table = zip(*feature_value_FS)
 	ofile_dir = results_dir+'temp_feature_set1.csv'
+	print(ofile_dir)
 	into_tab(np.array(transposed_table), ofile_dir, ',')
 
 	###########################################################
@@ -252,130 +265,155 @@ if __name__ == '__main__':
 	jvm.start(max_heap_size="1024m", packages=True)
 	loader = Loader(classname="weka.core.converters.CSVLoader")	
 	
-	path_dict = {}
-	nodes_to_keep = []
-	IG_dict = {}
-	#not to print a feature more than once
-	IG_phase1_features = []
-	phases_features = {}
-	for leaf in leaf_name_set:
-		leaf_path = []
-		leaf_taxon = leaf		
+	try:
+		path_dict = {}
+		nodes_to_keep = []
+		IG_dict = {}
+		#not to print a feature more than once
+		IG_phase1_features = []
+		phases_features = {}
+		print(leaf_name_set)
+		for leaf in leaf_name_set:
+			leaf_path = []
+			leaf_taxon = leaf		
 
-		if leaf_taxon in child_parent_dict.keys():
-			leaf_path.append(leaf_taxon)
+			if leaf_taxon in child_parent_dict.keys():
+				leaf_path.append(leaf_taxon)
 
-			parent_tax = child_parent_dict[leaf_taxon]
-			leaf_path.append(parent_tax)
+				parent_tax = child_parent_dict[leaf_taxon]
+				leaf_path.append(parent_tax)
+				
+				for i in range(no_of_levels):
+					if leaf_path[-1] in child_parent_dict.keys():
+						if not(child_parent_dict[leaf_path[-1]] in leaf_path):
+							parent_tax = child_parent_dict[leaf_path[-1]]
+							leaf_path.append(parent_tax)
+					else:
+						break
+
+				#the active nodes in the path from the leaf to the root
+				selected_node_LP = []
+				feature_value_LP = []
+
+				for n in leaf_path:
+					if (n in leaf_name_set) and (not(root_node in n)):
+						selected_node_LP.append(n) ## TODO needs a better solution. I'm not sure why n is ''
+						feature_value_LP.append([n]+taxon_value_dict[n])
+						# selected_node_LP.append(n)
+						# feature_value_LP.append([n]+taxon_value_dict[n])
+
+				if len(selected_node_LP)>0:
+					#to compute the information gain via weka
+					text_labels = [True if x == '1' else False for x in feature_records["label"]] ## edit
+					feature_value_LP.append(["label"]+text_labels)
+					
+					# index = ["index"] + list(range(1, len(feature_value_LP[0])))
+					# feature_value_LP = [index] + feature_value_LP
+
+					transposed_table = zip(*feature_value_LP)
+					ofile_dir = results_dir+'temp_table.csv'
+					into_tab(np.array(transposed_table), ofile_dir, ',')
 			
-			for i in range(no_of_levels):
-				if leaf_path[-1] in child_parent_dict.keys():
-					if not(child_parent_dict[leaf_path[-1]] in leaf_path):
-						parent_tax = child_parent_dict[leaf_path[-1]]
-						leaf_path.append(parent_tax)
-				else:
-					break
+					results, mean_IG = get_IG(ofile_dir, loader)
 
-			#the active nodes in the path from the leaf to the root
-			selected_node_LP = []
-			feature_value_LP = []
+					# print("HIIIIIIIII", results, mean_IG)
+					#check the IG score of each selected node in the path
+					for s in selected_node_LP:
+						print(s)
+						print(results[s])
+						if not(s in IG_phase1_features):
+							IG_phase1_features.append(s)
+							phases_features.update({s: str(results[s])})
 
-			for n in leaf_path:
-				if (n in leaf_name_set) and (not(root_node in n)):
-					selected_node_LP.append(n)
-					feature_value_LP.append([n]+taxon_value_dict[n])
+						if (results[s] < mean_IG) or (results[s] <= 0):
+							nodes_to_remove.append(s)
+						else:
+							t = results[s]
+							nodes_to_keep.append(s)
+							if not (s in IG_dict.keys()):
+								#save the survived nodes with their IG scores
+								IG_dict.update({s: results[s]})
+								phases_features.update({s: str(t)})
 
-			if len(selected_node_LP)>0:
-				#to compute the information gain via weka
-				feature_value_LP.append(["label"]+feature_records["label"])
-				transposed_table = zip(*feature_value_LP)
+		print "Done with phase 2!"
+
+		# remove what needs to be removed
+		for r in nodes_to_remove:
+			if not(r in nodes_to_keep) and (r in leaf_name_set):
+				leaf_name_set.remove(r)
+
+		print "Number of left features from phase 2: "+str(len(leaf_name_set))
+		print(leaf_name_set)
+
+		# create the temp feature set
+		feature_value_FS = []
+		for node in leaf_name_set:
+			if not(root_node in node):
+				feature_value_FS.append([node]+taxon_value_dict[node])
+		feature_value_FS.append(["label"]+feature_records["label"])
+		transposed_table = zip(*feature_value_FS)
+		ofile_dir = results_dir+'temp_feature_set2.csv'
+		into_tab(np.array(transposed_table), ofile_dir, ',')
+
+		###########################################################
+		## The third phase of Hierarchy selection approach ##
+		###########################################################
+
+		#calculate the avg. IG score of the nodes selected by the second phase
+		ig_dict_sum = sum(IG_dict.values())
+		ig_dict_len = len(IG_dict.values())
+		print(ig_dict_sum)
+		IG_threshold = ig_dict_sum / ig_dict_len
+
+		print("hey!")
+		## TODO debug from here
+		
+		otus_to_keep = {}
+		feature_value_LP = []
+		valid_otu_list = []
+		IG_results = {}
+		for otu in otu_parent_dict.keys():
+			if not(otu in nodes_to_remove) and not(otu in leaf_name_set):
+				feature_value_LP.append([otu]+taxon_value_dict[otu])
+				valid_otu_list.append(otu)			
+		#to optimize the time needed
+		otu_table_partitions = split_list(feature_value_LP, 4)
+		for partition in otu_table_partitions:
+			if len(partition)!=0:
+				partition.append(["label"]+feature_records["label"])
+				#mydata = np.array(partition)
+				#transposed_table = mydata.T
+				transposed_table = zip(*partition)
 				ofile_dir = results_dir+'temp_table.csv'
 				into_tab(np.array(transposed_table), ofile_dir, ',')
-	
-				results, mean_IG = get_IG(ofile_dir)
-				#check the IG score of each selected node in the path
-				for s in selected_node_LP:
-					if not(s in IG_phase1_features):
-						IG_phase1_features.append(s)
-						phases_features.update({s: str(results[s])})
+				results, avg_IG = get_IG(ofile_dir, loader)
+				IG_results.update(results)
+		phase3_features = []		
+		#check the IG score of the selected otu against the overall avg. IG
+		for s in IG_results:
+			if (IG_results[s] > (1.0*IG_threshold)) and (IG_results[s] > 0):
+				otus_to_keep.update({s: IG_results[s]})
+				phase3_features.append(s)
+				phases_features.update({s: str(IG_results[s])})
+		print "Done with phase 3!"
+		print "Number of considered OTUs via phase 3: "+str(len(phase3_features))
 
-					if (results[s] < mean_IG) or (results[s] <= 0):
-						nodes_to_remove.append(s)
-					else:
-						t = results[s]
-						nodes_to_keep.append(s)
-						if not(s in IG_dict.keys()):
-							#save the survived nodes with their IG scores
-							IG_dict.update({s: results[s]})
-							phases_features.update({s: str(t)})
-
-	print "Done with phase 2!"
-
-	# remove what needs to be removed
-	for r in nodes_to_remove:
-		if not(r in nodes_to_keep) and (r in leaf_name_set):
-			leaf_name_set.remove(r)
-
-	print "Number of left features from phase 2: "+str(len(leaf_name_set))
-
-	# create the temp feature set
-	feature_value_FS = []
-	for node in leaf_name_set:
-		if not(root_node in node):
+		# create the temp feature set
+		feature_value_FS = []
+		for node in phase3_features:
 			feature_value_FS.append([node]+taxon_value_dict[node])
-	feature_value_FS.append(["label"]+feature_records["label"])
-	transposed_table = zip(*feature_value_FS)
-	ofile_dir = results_dir+'temp_feature_set2.csv'
-	into_tab(np.array(transposed_table), ofile_dir, ',')
+		feature_value_FS.append(["label"]+feature_records["label"])
+		transposed_table = zip(*feature_value_FS)
+		ofile_dir = results_dir+'temp_feature_set3.csv'
+		into_tab(np.array(transposed_table), ofile_dir, ',')
 
-	###########################################################
-	   ## The third phase of Hierarchy selection approach ##
-	###########################################################
+		######################################################################
+		
+		jvm.stop()
 
-	#calculate the avg. IG score of the nodes selected by the second phase
-	IG_threshold = sum(IG_dict.values())/len(IG_dict.values())
-	otus_to_keep = {}
-	feature_value_LP = []
-	valid_otu_list = []
-	IG_results = {}
-	for otu in otu_parent_dict.keys():
-		if not(otu in nodes_to_remove) and not(otu in leaf_name_set):
-			feature_value_LP.append([otu]+taxon_value_dict[otu])
-			valid_otu_list.append(otu)			
-	#to optimize the time needed
-	otu_table_partitions = split_list(feature_value_LP, 4)
-	for partition in otu_table_partitions:
-		if len(partition)!=0:
-			partition.append(["label"]+feature_records["label"])
-			#mydata = np.array(partition)
-			#transposed_table = mydata.T
-			transposed_table = zip(*partition)
-			ofile_dir = results_dir+'temp_table.csv'
-			into_tab(np.array(transposed_table), ofile_dir, ',')
-			results, avg_IG = get_IG(ofile_dir)
-			IG_results.update(results)
-	phase3_features = []		
-	#check the IG score of the selected otu against the overall avg. IG
-	for s in IG_results:
-		if (IG_results[s] > (1.0*IG_threshold)) and (IG_results[s] > 0):
-			otus_to_keep.update({s: IG_results[s]})
-			phase3_features.append(s)
-			phases_features.update({s: str(IG_results[s])})
-	print "Done with phase 3!"
-	print "Number of considered OTUs via phase 3: "+str(len(phase3_features))
-
-	# create the temp feature set
-	feature_value_FS = []
-	for node in phase3_features:
-		feature_value_FS.append([node]+taxon_value_dict[node])
-	feature_value_FS.append(["label"]+feature_records["label"])
-	transposed_table = zip(*feature_value_FS)
-	ofile_dir = results_dir+'temp_feature_set3.csv'
-	into_tab(np.array(transposed_table), ofile_dir, ',')
-
-	######################################################################
-
-	jvm.stop()
+	except Exception:
+		jvm.stop()
+		raise Exception("UHHH, AN ERROR AND PYTHON DUN KNOW HOW TO TELL JAVA")
 	
 	# add informative OTUs
 	for otu in otus_to_keep.keys():
